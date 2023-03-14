@@ -1,4 +1,4 @@
-from sumo_rl import SumoEnvironment
+from sumo_rl_rep import SumoEnvironment
 from gymnasium.utils.env_checker import check_env
 
 

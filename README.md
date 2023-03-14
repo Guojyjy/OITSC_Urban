@@ -107,9 +107,10 @@ Please see [SumoEnvironment docstring](https://github.com/LucasAlegre/sumo-rl/bl
 ### Single Agent Environment
 
 If your network only has ONE traffic light, then you can instantiate a standard Gymnasium env (see [Gymnasium API](https://gymnasium.farama.org/api/env/)):
+
 ```python
 import gymnasium as gym
-import sumo_rl
+import sumo_rl_rep
 env = gym.make('sumo-rl-v0',
                 net_file='path_to_your_network.net.xml',
                 route_file='path_to_your_routefile.rou.xml',
@@ -127,8 +128,8 @@ while not done:
 See [Petting Zoo API](https://pettingzoo.farama.org/content/basic_usage/) for more details.
 
 ```python
-import sumo_rl
-env = sumo_rl.env(net_file='sumo_net_file.net.xml',
+import sumo_rl_rep
+env = sumo_rl_rep.env(net_file='sumo_net_file.net.xml',
                   route_file='sumo_route_file.rou.xml',
                   use_gui=True,
                   num_seconds=3600)  

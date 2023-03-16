@@ -499,7 +499,9 @@ class UrbanEnv(MultiAgentEnv):
         if not self.sumo_warnings:
             sumo_cmd.append('--no-warnings')
         if self.additional_sumo_cmd is not None:
-            sumo_cmd.extend(self.additional_sumo_cmd)
+            sumo_cmd.extend('--tripinfo-output')
+            sumo_cmd.extend(self.additional_sumo_cmd[1]+'{}.xml'.format(self.run))
+            # sumo_cmd.extend(self.additional_sumo_cmd)
         if self.use_gui:
             sumo_cmd.extend(['--start', '--quit-on-end'])
 
@@ -673,7 +675,7 @@ class UrbanEnv(MultiAgentEnv):
         if out_csv_name is not None:
             df = pd.DataFrame(self.metrics)
             Path(Path(out_csv_name).parent).mkdir(parents=True, exist_ok=True)
-            df.to_csv(out_csv_name + '_run{}'.format(run) + '.csv', index=False)
+            df.to_csv(out_csv_name + '_iter{}'.format(run) + '.csv', index=False)
 
     # Below functions are for discrete state space
 

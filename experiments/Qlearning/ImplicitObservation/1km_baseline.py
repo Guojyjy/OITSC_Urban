@@ -33,8 +33,8 @@ if __name__ == '__main__':
                    single_agent=False,
                    use_gui=True,
                    additional_sumo_cmd=['--tripinfo-output',
-                                        'ImplicitObservation-QL-tripinfo-baseline-run1.xml'],
-                   out_csv_name='ImplicitObservation-QL-output-baseline',
+                                        'ImplicitObservation-QL-tripinfo-baseline-run{}-iter'.format(runs)],
+                   out_csv_name='ImplicitObservation-QL-output-baseline-run{}'.format(runs),
                    oitsc=False
                    )
 
@@ -65,7 +65,7 @@ if __name__ == '__main__':
                 next_state = str(env.encode(observations[agent_id]))
                 ql_agents[agent_id].learn(next_state, reward)
 
-        outfile = open('ImplicitObservation-QL-evaluation-baseline_run1.csv', 'w')
+        outfile = open('ImplicitObservation-QL-evaluation-baseline_run{}_iter{}.csv'.format(runs, run), 'w')
         writer = csv.writer(outfile)
         writer.writerows(output_data)
         outfile.close()

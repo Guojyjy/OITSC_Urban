@@ -20,25 +20,26 @@ if __name__ == '__main__':
     alpha = 0.1
     gamma = 0.99
     decay = 1
-    runs = 1
+    runs = 5
 
     env = UrbanEnvImportantObservation(net_file=ABS_DIR + 'nets/1km/selected1km.net.xml',
-                   route_file=ABS_DIR + 'nets/1km/selected1km_1kSec.rou.xml',
-                   horizon=1400,
-                   warmup=100,
-                   delta_time=5,
-                   yellow_time=2,
-                   min_green=5,
-                   max_green=100,
-                   single_agent=False,
-                   use_gui=False,
-                   additional_sumo_cmd=['--tripinfo-output',
-                                        'ImportantObservation-QL-tripinfo-baseline-run1.xml'],
-                   out_csv_name='ImportantObservation-QL-output-baseline',
-                   oitsc=False
-                   )
+                                       route_file=ABS_DIR + 'nets/1km/selected1km_1kSec.rou.xml',
+                                       horizon=1800,
+                                       warmup=100,
+                                       delta_time=5,
+                                       yellow_time=2,
+                                       min_green=5,
+                                       max_green=100,
+                                       single_agent=False,
+                                       use_gui=True,
+                                       additional_sumo_cmd=['--tripinfo-output',
+                                                            'ImportantObservation-QL-tripinfo-baseline-run{}-iter'.format(
+                                                                runs)],
+                                       out_csv_name='ImportantObservation-QL-output-baseline-run{}'.format(runs),
+                                       oitsc=False
+                                       )
 
-    for run in range(1, runs + 4):
+    for run in range(1, 2):
         initial_states = env.reset()  # return obs
 
         ql_agents = {ts: QLAgent(starting_state=env.encode(initial_states[ts]),
@@ -65,7 +66,7 @@ if __name__ == '__main__':
                 next_state = str(env.encode(observations[agent_id]))
                 ql_agents[agent_id].learn(next_state, reward)
 
-        outfile = open('ImportantObservation-QL-evaluation-baseline_run1.csv', 'w')
+        outfile = open('ImportantObservation-QL-evaluation-baseline_run{}_iter{}.csv'.format(runs, run), 'w')
         writer = csv.writer(outfile)
         writer.writerows(output_data)
         outfile.close()

@@ -8,9 +8,10 @@ from stable_baselines import logger
 from stable_baselines.common import tf_util, OffPolicyRLModel, SetVerbosity, TensorboardWriter
 from stable_baselines.common.vec_env import VecEnv
 from stable_baselines.common.schedules import LinearSchedule
-from stable_baselines.common.buffers import ReplayBuffer, PrioritizedReplayBuffer
 from stable_baselines.deepq.build_graph import build_train
+from stable_baselines.deepq.replay_buffer import ReplayBuffer, PrioritizedReplayBuffer  # added from github
 from stable_baselines.deepq.policies import DQNPolicy
+from stable_baselines.a2c.utils import total_episode_reward_logger  # added from github
 
 
 class DQN(OffPolicyRLModel):
@@ -54,7 +55,6 @@ class DQN(OffPolicyRLModel):
     :param n_cpu_tf_sess: (int) The number of threads for TensorFlow operations
         If None, the number of cpu of the current machine will be used.
     """
-
     def __init__(self, policy, env, gamma=0.99, learning_rate=5e-4, buffer_size=50000, exploration_fraction=0.1,
                  exploration_final_eps=0.02, exploration_initial_eps=1.0, train_freq=1, batch_size=32, double_q=True,
                  learning_starts=1000, target_network_update_freq=500, prioritized_replay=False,
@@ -65,8 +65,7 @@ class DQN(OffPolicyRLModel):
 
         # TODO: replay_buffer refactoring
         super(DQN, self).__init__(policy=policy, env=env, replay_buffer=None, verbose=verbose, policy_base=DQNPolicy,
-                                  requires_vec_env=False, policy_kwargs=policy_kwargs, seed=seed,
-                                  n_cpu_tf_sess=n_cpu_tf_sess)
+                                  requires_vec_env=False, policy_kwargs=policy_kwargs, seed=seed, n_cpu_tf_sess=n_cpu_tf_sess)
 
         self.param_noise = param_noise
         self.learning_starts = learning_starts
@@ -100,6 +99,7 @@ class DQN(OffPolicyRLModel):
         self.exploration = None
         self.params = None
         self.summary = None
+        self.episode_reward = None
 
         if _init_setup_model:
             self.setup_model()
@@ -128,7 +128,7 @@ class DQN(OffPolicyRLModel):
                 self.set_random_seed(self.seed)
                 self.sess = tf_util.make_session(num_cpu=self.n_cpu_tf_sess, graph=self.graph)
 
-                optimizer = tf.train.AdamOptimizer(learning_rate=self.learning_rate)
+                optimizer = tf.optimizers.Adam(learning_rate=self.learning_rate)
 
                 self.act, self._train_step, self.update_target, self.step_model = build_train(
                     q_func=partial(self.policy, **self.policy_kwargs),
@@ -155,7 +155,6 @@ class DQN(OffPolicyRLModel):
               reset_num_timesteps=True, replay_wrapper=None):
 
         new_tb_log = self._init_num_timesteps(reset_num_timesteps)
-        callback = self._init_callback(callback)
 
         with SetVerbosity(self.verbose), TensorboardWriter(self.graph, self.tensorboard_log, tb_log_name, new_tb_log) \
                 as writer:
@@ -186,21 +185,16 @@ class DQN(OffPolicyRLModel):
 
             episode_rewards = [0.0]
             episode_successes = []
-
-            callback.on_training_start(locals(), globals())
-            callback.on_rollout_start()
-
-            reset = True
             obs = self.env.reset()
-
-            # Retrieve unnormalized observation for saving into the buffer
-            if self._vec_normalize_env is not None:
-                obs_ = self._vec_normalize_env.get_original_obs().squeeze()
-
-            waiting_time_data = []
+            reset = True
+            self.episode_reward = np.zeros((1,))
 
             for _ in range(total_timesteps):
-                action = {}
+                if callback is not None:
+                    # Only stop training if return value is False, not when it is None. This is for backwards
+                    # compatibility with callbacks that have no return statement.
+                    if callback(locals(), globals()) is False:
+                        break
                 # Take action and update exploration to the newest value
                 kwargs = {}
                 if not self.param_noise:
@@ -218,57 +212,22 @@ class DQN(OffPolicyRLModel):
                     kwargs['reset'] = reset
                     kwargs['update_param_noise_threshold'] = update_param_noise_threshold
                     kwargs['update_param_noise_scale'] = True
-
-                # new added
-                for agent_id in range(0, 16):
-                    with self.sess.as_default():
-                        action[str(agent_id)] = \
-                            self.act(np.array(obs[str(agent_id)])[None], update_eps=update_eps, **kwargs)[0]
-
+                with self.sess.as_default():
+                    action = self.act(np.array(obs)[None], update_eps=update_eps, **kwargs)[0]
                 env_action = action
                 reset = False
+                new_obs, rew, done, info = self.env.step(env_action)
+                # Store transition in the replay buffer.
+                self.replay_buffer.add(obs, action, rew, new_obs, float(done))
+                obs = new_obs
 
-                # neighbors_list, time_on_phase_list, phase_id_list, step_num, veh_position_data, veh_waiting_time,
-                # veh_complete_data, total_new_obs, total_rew, done, info = self.env.step(
-                #     env_action)
-                _, observations, rewards, done, info = self.env.step(env_action)
+                if writer is not None:
+                    ep_rew = np.array([rew]).reshape((1, -1))
+                    ep_done = np.array([done]).reshape((1, -1))
+                    self.episode_reward = total_episode_reward_logger(self.episode_reward, ep_rew, ep_done, writer,
+                                                                      self.num_timesteps)
 
-                # new added
-
-                for agent_id in range(0, 16):
-                    new_obs = observations[str(agent_id)]
-                    rew = rewards[str(agent_id)]
-
-                    self.num_timesteps += 1
-
-                    # Stop training if return value is False
-                    callback.update_locals(locals())
-                    if callback.on_step() is False:
-                        break
-
-                    # Store only the unnormalized version
-                    if self._vec_normalize_env is not None:
-                        new_obs_ = self._vec_normalize_env.get_original_obs().squeeze()
-                        reward_ = self._vec_normalize_env.get_original_reward().squeeze()
-                    else:
-                        # Avoid changing the original ones
-                        obs_, new_obs_, reward_ = obs[str(agent_id)], new_obs, rew
-                    # Store transition in the replay buffer.
-
-                    self.replay_buffer_add(obs_, action[str(agent_id)], reward_, new_obs_, done, info)
-                    obs[str(agent_id)] = new_obs
-                    # Save the unnormalized observation
-                    if self._vec_normalize_env is not None:
-                        obs_ = new_obs_
-
-                    if writer is not None:
-                        ep_rew = np.array([reward_]).reshape((1, -1))
-                        ep_done = np.array([done]).reshape((1, -1))
-                        tf_util.total_episode_reward_logger(self.episode_reward, ep_rew, ep_done, writer,
-                                                            self.num_timesteps)
-
-                    episode_rewards[-1] += reward_
-
+                episode_rewards[-1] += rew
                 if done:
                     maybe_is_success = info.get('is_success')
                     if maybe_is_success is not None:
@@ -283,20 +242,16 @@ class DQN(OffPolicyRLModel):
                 can_sample = self.replay_buffer.can_sample(self.batch_size)
                 if can_sample and self.num_timesteps > self.learning_starts \
                         and self.num_timesteps % self.train_freq == 0:
-
-                    callback.on_rollout_end()
                     # Minimize the error in Bellman's equation on a batch sampled from replay buffer.
                     # pytype:disable=bad-unpacking
                     if self.prioritized_replay:
                         assert self.beta_schedule is not None, \
-                            "BUG: should be LinearSchedule when self.prioritized_replay True"
+                               "BUG: should be LinearSchedule when self.prioritized_replay True"
                         experience = self.replay_buffer.sample(self.batch_size,
-                                                               beta=self.beta_schedule.value(self.num_timesteps),
-                                                               env=self._vec_normalize_env)
+                                                               beta=self.beta_schedule.value(self.num_timesteps))
                         (obses_t, actions, rewards, obses_tp1, dones, weights, batch_idxes) = experience
                     else:
-                        obses_t, actions, rewards, obses_tp1, dones = self.replay_buffer.sample(self.batch_size,
-                                                                                                env=self._vec_normalize_env)
+                        obses_t, actions, rewards, obses_tp1, dones = self.replay_buffer.sample(self.batch_size)
                         weights, batch_idxes = np.ones_like(rewards), None
                     # pytype:enable=bad-unpacking
 
@@ -323,8 +278,6 @@ class DQN(OffPolicyRLModel):
                         assert isinstance(self.replay_buffer, PrioritizedReplayBuffer)
                         self.replay_buffer.update_priorities(batch_idxes, new_priorities)
 
-                    callback.on_rollout_start()
-
                 if can_sample and self.num_timesteps > self.learning_starts and \
                         self.num_timesteps % self.target_network_update_freq == 0:
                     # Update target network periodically.
@@ -346,7 +299,8 @@ class DQN(OffPolicyRLModel):
                                           int(100 * self.exploration.value(self.num_timesteps)))
                     logger.dump_tabular()
 
-        callback.on_training_end()
+                self.num_timesteps += 1
+
         return self
 
     def predict(self, observation, state=None, mask=None, deterministic=True):

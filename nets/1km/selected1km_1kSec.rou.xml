@@ -7,7 +7,7 @@
 <routes xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="http://sumo.dlr.de/xsd/routes_file.xsd">
     <vType id="Ambulance"  length="5" accel="2.6" decel="4.5" sigma="1.0" guiShape="emergency" color="white" />
     <vType id="trailer"  length="10" accel="2.6" decel="4.5" sigma="1.0" guiShape="truck/trailer" color="red" />
-    <vType id="fueltruck"  length="10" accel="2.6" decel="4.5" sigma="1.0" guiShape="truck/trailer" color="black" />
+    <vType id="fueltruck"  length="10" accel="2.6" decel="4.5" sigma="1.0" guiShape="truck/trailer" color="blue" />
 
     <route edges="-4475730 2294384#0 4472590#0 37721356#0 4078079#1 38192817 gneE51 gneE52 -43321722 -43321718#3" id="394744908#1_to_302527226#1"/>
     <route edges="4074528#0 125872847#0 3792428 3792427#0 52879956 357012332#0 357012332#1 59604115 37956677#0 2294310#0 375772038#0 375772038#6 7849019#2 7849021#0 7849022#0 524737392#0 -523892327#0" id="394744908#1_to_-523892327#0"/>

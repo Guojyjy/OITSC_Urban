@@ -24,21 +24,21 @@ if __name__ == '__main__':
 
     env = UrbanEnvSampleObservation(net_file=ABS_DIR + 'nets/1km/selected1km.net.xml',
                    route_file=ABS_DIR + 'nets/1km/selected1km_1kSec.rou.xml',
-                   horizon=1400,
+                   horizon=1800,
                    warmup=100,
                    delta_time=5,
                    yellow_time=2,
                    min_green=5,
                    max_green=100,
                    single_agent=False,
-                   use_gui=True,
+                   use_gui=False,
                    additional_sumo_cmd=['--tripinfo-output',
-                                        'SampleObservation-QL-tripinfo-baseline-run1.xml'],
-                   out_csv_name='SampleObservation-QL-output-baseline',
+                                        'SampleObservation-QL-tripinfo-baseline-run{}-iter'.format(runs)],
+                   out_csv_name='SampleObservation-QL-output-baseline-run{}'.format(runs),
                    oitsc=False
                    )
 
-    for run in range(1, runs + 4):
+    for run in range(1, runs + 999):
         initial_states = env.reset()  # return obs
 
         ql_agents = {ts: QLAgent(starting_state=env.encode(initial_states[ts]),
@@ -65,7 +65,7 @@ if __name__ == '__main__':
                 next_state = str(env.encode(observations[agent_id]))
                 ql_agents[agent_id].learn(next_state, reward)
 
-        outfile = open('SampleObservation-QL-evaluation-baseline_run1.csv', 'w')
+        outfile = open('SampleObservation-QL-evaluation-baseline_run{}_iter{}.csv'.format(runs, run), 'w')
         writer = csv.writer(outfile)
         writer.writerows(output_data)
         outfile.close()

@@ -62,9 +62,9 @@ class SumoEnvironment(gym.Env):
             route_file: str,
             out_csv_name: Optional[str] = None,
             use_gui: bool = False,
-            begin_time: int = 0, # TODO: begin_time needed?
+            begin_time: int = 0,  # TODO: begin_time needed?
             num_seconds: int = 20000,
-            max_depart_delay: int = 100000, # TODO: max_depart_delay needed?
+            max_depart_delay: int = 100000,  # TODO: max_depart_delay needed?
             waiting_time_memory: int = 1000,
             time_to_teleport: int = -1,  # TODO: time_to_teleport, non-positive values disable teleporting
             delta_time: int = 5,
@@ -72,8 +72,8 @@ class SumoEnvironment(gym.Env):
             min_green: int = 5,
             max_green: int = 50,
             single_agent: bool = False,
-            reward_fn: Union[str, Callable, dict] = 'diff-waiting-time', # TODO: reward_fn skipped
-            observation_fn: Union[str, Callable] = 'default', # TODO: observation_fn skipped
+            reward_fn: Union[str, Callable, dict] = 'diff-waiting-time',  # TODO: reward_fn skipped
+            observation_fn: Union[str, Callable] = 'default',  # TODO: observation_fn skipped
             add_system_info: bool = True,  # TODO: add_system_info skipped
             add_per_agent_info: bool = True,  # TODO: add_per_agent_info skipped
             sumo_seed: Union[str, int] = 'random',
@@ -379,7 +379,7 @@ class SumoEnvironment(gym.Env):
         return tuple([phase, min_green] + density_queue)
 
     def _discretize_density(self, density):
-        return min(int(density*10), 9)
+        return min(int(density * 10), 9)
 
 
 #      ------- OITSC_Urban -------
@@ -460,9 +460,12 @@ class UrbanEnv(MultiAgentEnv):
         # Start a sumo connection, only to retrieve traffic light information
         self.label = str(UrbanEnv.CONNECTION_LABEL)
         UrbanEnv.CONNECTION_LABEL += 1
-        traci.start([sumolib.checkBinary('sumo'), '-n', self._net], numRetries=100, label='init_connection' + self.label)
+        traci.start([sumolib.checkBinary('sumo'), '-n', self._net], numRetries=100,
+                    label='init_connection' + self.label)
         info_sumo = traci.getConnection('init_connection' + self.label)
         self.ts_ids = list(info_sumo.trafficlight.getIDList())
+        self.agents = self.ts_ids  # for PettingZooEnv
+        self.max_num_lanes = self._get_max_num_lanes(self.ts_ids, info_sumo)
         info_sumo.close()
 
         # process scenario file to retrieve scenario info
@@ -470,7 +473,7 @@ class UrbanEnv(MultiAgentEnv):
         self.routes = self._get_routes_choice()
 
         self.observations = {ts: None for ts in self.ts_ids}
-        self.rewards = {ts: None for ts in self.ts_ids}
+        self.rewards = {ts: 0 for ts in self.ts_ids}
         self.traffic_signals = dict()
         self.veh_type = dict()
         self.veh_waiting_per_lane = dict()
@@ -499,8 +502,8 @@ class UrbanEnv(MultiAgentEnv):
         if not self.sumo_warnings:
             sumo_cmd.append('--no-warnings')
         if self.additional_sumo_cmd is not None:
-            sumo_cmd.extend('--tripinfo-output')
-            sumo_cmd.extend(self.additional_sumo_cmd[1]+'{}.xml'.format(self.run))
+            sumo_cmd.append('--tripinfo-output')
+            sumo_cmd.extend([self.additional_sumo_cmd[1] + '{}.xml'.format(self.run)])
             # sumo_cmd.extend(self.additional_sumo_cmd)
         if self.use_gui:
             sumo_cmd.extend(['--start', '--quit-on-end'])
@@ -512,10 +515,15 @@ class UrbanEnv(MultiAgentEnv):
         if self.use_gui:
             self.sumo.gui.setSchema(traci.gui.DEFAULT_VIEW, "real world")
 
-    def reset(self) -> MultiAgentDict:
+    def reset(self,
+              *,
+              seed: Optional[int] = None,
+              options: Optional[dict] = None) -> MultiAgentDict:
+
         if self.run != 0:
             self.close()
-            self.save_csv(self.out_csv_name, self.run)
+            if self.out_csv_name:
+                self.save_csv(self.out_csv_name, self.run)
         self.metrics = []
         self.veh_type = dict()
         self.veh_waiting_per_lane = dict()
@@ -530,7 +538,6 @@ class UrbanEnv(MultiAgentEnv):
         self.traffic_signals = {ts: TrafficSignalUrban(self, ts, self.ts_phases[ts], self.delta_time,
                                                        self.yellow_time, self.min_green, self.max_green,
                                                        self.sumo) for ts in self.ts_ids}
-        self.max_num_lanes = self._get_max_num_lanes()
 
         # warmup before learning
         for _ in range(self.warmup):
@@ -539,7 +546,7 @@ class UrbanEnv(MultiAgentEnv):
         if self.single_agent:
             return self._compute_observations()[self.ts_ids[0]]
         else:
-            return self._compute_observations()
+            return self._compute_observations(), self._compute_info_rllib()  # TODO: rllib
 
     @property
     def sim_step(self):
@@ -549,7 +556,7 @@ class UrbanEnv(MultiAgentEnv):
         return self.sumo.simulation.getTime()
 
     def step(
-        self, action_dict: MultiAgentDict
+            self, action_dict: MultiAgentDict
     ) -> Tuple[MultiAgentDict, MultiAgentDict, MultiAgentDict, MultiAgentDict]:
 
         for _ in range(self.delta_time):
@@ -559,20 +566,24 @@ class UrbanEnv(MultiAgentEnv):
         if action_dict:
             self._apply_actions(action_dict)
 
-        print("step_num:", self.sim_step)
-        if self.sim_step % 120 == 0:  # unexpected events occur per 2 minutes
+        # print("step_num:", self.sim_step)
+        if self.sim_step % 500 == 0:  # unexpected events occur per 5 minutes
             self._insert_important_vehicles()
 
         observations = self._compute_observations()
         self.get_waiting_vehs()
         rewards = self._compute_rewards()
         dones = self._compute_dones()
-        info = self._compute_info()
+        truncateds = self._compute_truncateds()
+        info = self._compute_info_rllib()
 
         if self.single_agent:
             return observations[self.ts_ids[0]], rewards[self.ts_ids[0]], dones['__all__'], {}
         else:
-            return self.veh_waiting_all, self.veh_type, observations, rewards, dones, info
+            return observations, rewards, dones, truncateds, info  # TODO: changed cuz rllib
+            # self.veh_waiting_all, self.veh_type, for save evaluation data
+            # obs, rewards, terminateds, truncateds, infos = env.step(agent_dict)
+            # Truncated values for each ready agent.
 
     def _apply_actions(self, actions):
         if self.single_agent:
@@ -586,17 +597,26 @@ class UrbanEnv(MultiAgentEnv):
         dones['__all__'] = self.sim_step > self.horizon
         return dones
 
+    def _compute_truncateds(self):
+        truncateds = {ts_id: False for ts_id in self.ts_ids}
+        truncateds['__all__'] = self.sim_step > self.horizon
+        return truncateds
+
     def _compute_info(self):
         info = {'step': self.sim_step}
         info.update({'avg_reward': np.mean(list(self.rewards.values()))})
-        info.update({'avg_waiting_time': np.sum(list(self.veh_waiting_all.values())) / len(self.veh_waiting_all.keys())})
+        info.update(
+            {'avg_waiting_time': np.sum(list(self.veh_waiting_all.values())) / len(self.veh_waiting_all.keys())})
         self.metrics.append(info)
         return info
+
+    def _compute_info_rllib(self):
+        return {}
 
     def _compute_observations(self):
         observations = {}
         for ts in self.ts_ids:
-            phase_index = self.traffic_signals[ts].get_phase_index()
+            phase_index = self.traffic_signals[ts].get_phase_index() / len(self.ts_phases[ts])
             density = self.traffic_signals[ts].get_lanes_density()
             queue = self.traffic_signals[ts].get_lanes_queue()
 
@@ -606,7 +626,7 @@ class UrbanEnv(MultiAgentEnv):
                 density.extend([0] * diff)
                 queue.extend([0] * diff)
 
-            observations.update({ts: [phase_index]+density+queue})
+            observations.update({ts: [phase_index] + density + queue})
         return observations
 
     def _compute_rewards(self):
@@ -628,6 +648,7 @@ class UrbanEnv(MultiAgentEnv):
         self.veh_waiting_diff = {veh_id: {lane_name: waiting time}}
         self.veh_waiting_all = {veh_id: waiting time}
         """
+        self.veh_waiting_diff = {}
         for veh in self.sumo.vehicle.getIDList():
             lane_now = self.sumo.vehicle.getLaneID(veh)
             waiting_all = self.sumo.vehicle.getAccumulatedWaitingTime(veh)
@@ -643,19 +664,19 @@ class UrbanEnv(MultiAgentEnv):
                     self.veh_waiting_per_lane[veh].update({lane_now: waiting_new})
                 else:
                     pre_waiting = self.veh_waiting_per_lane[veh][lane_now]
-                    self.veh_waiting_per_lane[veh].update({lane_now: pre_waiting+waiting_new})
+                    self.veh_waiting_per_lane[veh].update({lane_now: pre_waiting + waiting_new})
 
             self.veh_waiting_all.update({veh: waiting_all})
 
     @property
     def observation_space(self):
         # keep consistent for all ts in the network
-        self.discrete_observation_space = spaces.Tuple((
-            spaces.Discrete(self._get_max_num_phases()),
-            *(spaces.Discrete(10) for _ in range(2 * self.max_num_lanes))
-        ))
-        return spaces.Box(low=np.zeros(1+2*self.max_num_lanes, dtype=np.float32),
-                          high=np.ones(1+2*self.max_num_lanes, dtype=np.float32))
+        # self.discrete_observation_space = spaces.Tuple((
+        #     spaces.Discrete(self._get_max_num_phases()),
+        #     *(spaces.Discrete(10) for _ in range(2 * self.max_num_lanes))
+        # ))
+        return spaces.Box(low=np.zeros(1 + 2 * self.max_num_lanes, dtype=np.float32),
+                          high=np.ones(1 + 2 * self.max_num_lanes, dtype=np.float32))
 
     @property
     def action_space(self):
@@ -687,7 +708,7 @@ class UrbanEnv(MultiAgentEnv):
 
     def _discretize_density(self, density):
         # density and queue length
-        return min(int(density*10), 9)
+        return min(int(density * 10), 9)
 
     # Discrete
 
@@ -701,11 +722,11 @@ class UrbanEnv(MultiAgentEnv):
             ts_phases.update({tlLogic.id: phases})
         return ts_phases
 
-    # Collect info from self.traffic_lights
-    def _get_max_num_lanes(self):
+    # Collect info from sumo info connection
+    def _get_max_num_lanes(self, ts_ids, info_sumo):
         max_num_lanes = 0
-        for tl in self.traffic_signals:
-            max_num_lanes = max(len(self.traffic_signals[tl].lanes), max_num_lanes)
+        for tl in ts_ids:
+            max_num_lanes = max(len(info_sumo.trafficlight.getControlledLanes(tl)), max_num_lanes)
         return max_num_lanes
 
     def _get_max_num_phases(self):
@@ -716,19 +737,32 @@ class UrbanEnv(MultiAgentEnv):
 
     # insert important vehicles, e.g., ambulances, fuel trucks, and trailer trucks
     def _insert_important_vehicles(self):
-        for i in range(5):
-            random_route_id = random.randint(0, len(self.routes)-1)
-            traci.vehicle.add("Ambulance_"+str(self.ambulance_count), str(self.routes[random_route_id]),
+        now_ambulance_count = 0
+        now_fueltruck_count = 0
+        now_trailer_count = 0
+        for veh in self.sumo.vehicle.getIDList():
+            if self.sumo.vehicle.getTypeID(veh) == "Ambulance":
+                now_ambulance_count += 1
+            elif self.sumo.vehicle.getTypeID(veh) == "fueltruck":
+                now_fueltruck_count += 1
+            elif self.sumo.vehicle.getTypeID(veh) == "trailer":
+                now_trailer_count += 1
+
+        if now_ambulance_count < 1:
+            random_route_id = random.randint(0, len(self.routes) - 1)
+            traci.vehicle.add("Ambulance_" + str(self.ambulance_count), str(self.routes[random_route_id]),
                               "Ambulance", None, "random", "base", "0", "current", "max", "current", "", "", "", 0,
                               0)
             self.ambulance_count += 1
-            random_route_id = random.randint(0, len(self.routes)-1)
-            traci.vehicle.add("FuelTruck_"+str(self.fueltruck_count), str(self.routes[random_route_id]),
+        if now_fueltruck_count < 1:
+            random_route_id = random.randint(0, len(self.routes) - 1)
+            traci.vehicle.add("FuelTruck_" + str(self.fueltruck_count), str(self.routes[random_route_id]),
                               "fueltruck", None, "random", "base", "0", "current", "max", "current", "", "", "", 0,
                               0)
             self.fueltruck_count += 1
-            random_route_id = random.randint(0, len(self.routes)-1)
-            traci.vehicle.add("Trailer_"+str(self.trailer_count), str(self.routes[random_route_id]), "trailer",
+        if now_trailer_count < 1:
+            random_route_id = random.randint(0, len(self.routes) - 1)
+            traci.vehicle.add("Trailer_" + str(self.trailer_count), str(self.routes[random_route_id]), "trailer",
                               None, "random", "base", "0", "current", "max", "current", "", "", "", 0, 0)
             self.trailer_count += 1
 
@@ -762,8 +796,8 @@ class UrbanEnvImplicitObservation(UrbanEnv):
             oitsc: bool = False
     ) -> None:
         super().__init__(net_file, route_file, horizon, warmup, delta_time, yellow_time, min_green, max_green,
-                       single_agent, use_gui, sumo_seed, waiting_time_memory, time_to_teleport, sumo_warnings,
-                       additional_sumo_cmd, out_csv_name)
+                         single_agent, use_gui, sumo_seed, waiting_time_memory, time_to_teleport, sumo_warnings,
+                         additional_sumo_cmd, out_csv_name)
         self.oitsc = oitsc
         self.ts_phase = {}
         self.ts_phase_dura = {}
@@ -776,22 +810,29 @@ class UrbanEnvImplicitObservation(UrbanEnv):
         """
         rewards = {}
         pre_ts_phase = self.ts_phase
+        # count = 0
+        all_veh_list = self.sumo.vehicle.getIDList()
         for ts in self.ts_ids:
             self.ts_phase.update({ts: self.sumo.trafficlight.getRedYellowGreenState(ts)})
 
             sum_waiting = 0
             for veh in self.veh_waiting_diff.keys():
-                lane = list(self.veh_waiting_diff[veh].keys())[0]
-                if lane in self.traffic_signals[ts].lanes:
-                    if random.randint(0, 4) == 2:  # cannot get waiting time
-                        if self.oitsc and self.sumo.vehicle.isStopped(veh):
-                            if pre_ts_phase[ts] == self.ts_phase[ts]:  # same phase
-                                sum_waiting += -self.delta_time
-                            else:
-                                sum_waiting += -self.traffic_signals[ts].time_since_last_phase_change
-                    else:
-                        sum_waiting += self.veh_waiting_diff[veh][lane]
+                if veh in all_veh_list:
+                    lane = list(self.veh_waiting_diff[veh].keys())[0]
+                    if lane in self.traffic_signals[ts].lanes:
+                        if random.randint(0, 4) == 2:  # cannot get waiting time
+                            if self.oitsc and self.sumo.vehicle.isStopped(veh):
+                                # count += 1
+                                if pre_ts_phase[ts] == self.ts_phase[ts]:  # same phase
+                                    sum_waiting += -self.delta_time
+                                else:
+                                    sum_waiting += -self.traffic_signals[ts].time_since_last_phase_change
+                        else:
+                            sum_waiting += self.veh_waiting_diff[veh][lane]
+                            # count += 1
+
             rewards.update({ts: sum_waiting})
+        # print("{} vehs counted, total: {}".format(count, len(all_veh_list)))
         self.rewards = rewards
         return rewards
 
@@ -819,15 +860,16 @@ class UrbanEnvImportantObservation(UrbanEnv):
             oitsc: bool = False
     ) -> None:
         super().__init__(net_file, route_file, horizon, warmup, delta_time, yellow_time, min_green, max_green,
-                       single_agent, use_gui, sumo_seed, waiting_time_memory, time_to_teleport, sumo_warnings,
-                       additional_sumo_cmd, out_csv_name)
+                         single_agent, use_gui, sumo_seed, waiting_time_memory, time_to_teleport, sumo_warnings,
+                         additional_sumo_cmd, out_csv_name)
         self.oitsc = oitsc
         self.ts_phase_green_lanes = {}
 
     def reset(self) -> MultiAgentDict:
         if self.run != 0:
             self.close()
-            self.save_csv(self.out_csv_name, self.run)
+            if self.out_csv_name:
+                self.save_csv(self.out_csv_name, self.run)
         self.metrics = []
         self.veh_type = dict()
         self.veh_waiting_per_lane = dict()
@@ -842,7 +884,7 @@ class UrbanEnvImportantObservation(UrbanEnv):
         self.traffic_signals = {ts: TrafficSignalUrban(self, ts, self.ts_phases[ts], self.delta_time,
                                                        self.yellow_time, self.min_green, self.max_green,
                                                        self.sumo) for ts in self.ts_ids}
-        self.max_num_lanes = self._get_max_num_lanes()
+
         self.ts_phase_green_lanes = self._get_green_lanes_per_phase_all_ts()
 
         # warmup before learning
@@ -858,10 +900,12 @@ class UrbanEnvImportantObservation(UrbanEnv):
         if self.single_agent:
             self.traffic_signals[self.ts_ids[0]].phase_switching(int(actions))
         else:
-            if self.sim_step % 120 == 0 and self.oitsc:
+            if self.sim_step % 100 == 0 and self.oitsc:
+                print(self.sim_step)
                 ts_phase_count_important_vehicles = self.count_important_vehicles()
             for ts, action in actions.items():
-                if self.sim_step % 120 == 0 and self.oitsc:
+                if self.sim_step % 100 == 0 and self.oitsc:
+                    print(self.sim_step)
                     phase_count_important_vehicles = ts_phase_count_important_vehicles[ts]
                     proposed_phase = max(phase_count_important_vehicles, key=phase_count_important_vehicles.get)
                     self.traffic_signals[ts].phase_switching_important_observation(action, proposed_phase)
@@ -893,7 +937,6 @@ class UrbanEnvImportantObservation(UrbanEnv):
         return ts_phase_count_important_vehicles
 
 
-
 class UrbanEnvSampleObservation(UrbanEnv):
 
     def __init__(
@@ -917,15 +960,16 @@ class UrbanEnvSampleObservation(UrbanEnv):
             oitsc: bool = False
     ) -> None:
         super().__init__(net_file, route_file, horizon, warmup, delta_time, yellow_time, min_green, max_green,
-                       single_agent, use_gui, sumo_seed, waiting_time_memory, time_to_teleport, sumo_warnings,
-                       additional_sumo_cmd, out_csv_name)
+                         single_agent, use_gui, sumo_seed, waiting_time_memory, time_to_teleport, sumo_warnings,
+                         additional_sumo_cmd, out_csv_name)
         self.oitsc = oitsc
         self.pre_veh_waiting_per_lane = {}
 
     def reset(self) -> MultiAgentDict:
         if self.run != 0:
             self.close()
-            self.save_csv(self.out_csv_name, self.run)
+            if self.out_csv_name:
+                self.save_csv(self.out_csv_name, self.run)
         self.metrics = []
         self.veh_type = dict()
         self.veh_waiting_per_lane = dict()
@@ -941,7 +985,6 @@ class UrbanEnvSampleObservation(UrbanEnv):
         self.traffic_signals = {ts: TrafficSignalUrban(self, ts, self.ts_phases[ts], self.delta_time,
                                                        self.yellow_time, self.min_green, self.max_green,
                                                        self.sumo) for ts in self.ts_ids}
-        self.max_num_lanes = self._get_max_num_lanes()
 
         # warmup before learning
         for _ in range(self.warmup):
@@ -951,7 +994,6 @@ class UrbanEnvSampleObservation(UrbanEnv):
             return self._compute_observations()[self.ts_ids[0]]
         else:
             return self._compute_observations()
-
 
     def get_waiting_vehs(self):
         """
@@ -1012,6 +1054,7 @@ class SumoEnvironmentImplicitObservation(MultiAgentEnv):
     :param max_green: (int) Max green time in a phase
     :single_agent: (bool) If true, it behaves like a regular gym.Env. Else, it behaves like a MultiagentEnv (https://github.com/ray-project/ray/blob/master/python/ray/rllib/env/multi_agent_env.py)
     """
+
     # TODO: max_depart_delay is not necessary
     def __init__(self, net_file, route_file, tripinfo_output, phases, out_csv_name=None, use_gui=False,
                  num_seconds=20000, max_depart_delay=100000,
@@ -1501,7 +1544,7 @@ class SumoEnvironmentImplicitObservation(MultiAgentEnv):
         rewards = {}
         for ts in self.ts_ids:
             distance_val_per_road = self.traffic_signals[ts].get_distance_val()  # {road: {veh: getLanePos}}
-            for key in distance_val_per_road: # key = road name
+            for key in distance_val_per_road:  # key = road name
                 distance_val_per_vehicle = distance_val_per_road[key]
                 rewards[key] = 0
                 set_reward_zero = 0

@@ -1,6 +1,7 @@
 import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
+import numpy as np
 
 
 def sum_reward(train_file):
@@ -24,14 +25,17 @@ def draw_reward(reward_iter, iteration):
 
 
 if __name__ == '__main__':
-    output_name = "experiments/Qlearning/ImplicitObservation/ImplicitObservation-QL-output-baseline_run"
-    iteration = 4
+    output_name = "experiments/Qlearning/ImplicitObservation/ImplicitObservation-QL-output-proposed-run1_iter"
+    # output_name = "experiments/Qlearning/ImportantObservation/ImportantObservation-QL-output-baseline-run3_iter"
+
+    iteration = 999
 
     reward_iter = []
     for i in range(1, iteration):
         train_file = output_name+str(i)+'.csv'
         reward = sum_reward(train_file)
-        print(i, reward, train_file)
+        # print(i, reward, train_file)
         reward_iter.append(reward)
 
+    print("Reward average: {}".format(np.mean(reward_iter)))
     draw_reward(reward_iter, iteration)
